@@ -1,0 +1,19 @@
+# Confidential packet data, images and anything derived from them never go in git
+data/
+results/
+*.csv
+*.tif
+*.tiff
+*.npz
+*.pdf
+*.zip
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.DS_Store
