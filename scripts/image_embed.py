@@ -3,6 +3,9 @@
     python scripts/image_embed.py --packet PACKET_DIR --images TIFF_ROOT --backbone resnet50 \
         --crop-bottom 64 --out results/emb_resnet50.npz [--preview results/preview]
 
+Backbones: resnet50, dinov2_vits14, vgg16, vgg19 (per-channel mean and SD from blocks 3-5;
+select blocks later with image_eval.py --blocks), random / vgg_random (dry runs only).
+
 TIFF_ROOT holds originals at TIFF_ROOT/<relative_path> or TIFF_ROOT/<sha256>.tif.
 Inspect --preview PNGs first to set --crop-bottom (SEM data bar) and to check for
 burned-in labels, which must not reach the model.
@@ -14,7 +17,7 @@ from eptfe import image as I
 
 ap = argparse.ArgumentParser()
 ap.add_argument('--packet'); ap.add_argument('--images', required=True); ap.add_argument('--out', required=True)
-ap.add_argument('--backbone', default='resnet50', choices=['resnet50', 'dinov2_vits14', 'random'])
+ap.add_argument('--backbone', default='resnet50', choices=I.BACKBONES)
 ap.add_argument('--tile', type=int, default=224); ap.add_argument('--crop-bottom', type=int, default=0)
 ap.add_argument('--preview'); ap.add_argument('--preview-n', type=int, default=6)
 ap.add_argument('--no-verify', action='store_true', help='skip SHA-256 check (synthetic dry runs only)')
@@ -35,5 +38,6 @@ for k, row in enumerate(pk.images.itertuples()):
 if bad: sys.exit(f'SHA-256 mismatch for {len(bad)} images, refusing to continue: {bad[:5]}')
 ids = pk.samples.sample_id.tolist()
 np.savez_compressed(a.out, sample_id=np.array(ids), inner=np.stack([E[(i, 'in')] for i in ids]),
-                    outer=np.stack([E[(i, 'out')] for i in ids]), backbone=a.backbone, tile=a.tile, crop_bottom=a.crop_bottom)
+                    outer=np.stack([E[(i, 'out')] for i in ids]), backbone=a.backbone, tile=a.tile, crop_bottom=a.crop_bottom,
+                    blocks=np.array(I.feature_blocks(net)))
 print('wrote', a.out)

@@ -55,9 +55,47 @@ def save_preview(g, grid, size, path):
     img.save(path)
 
 
+BACKBONES = ('resnet50', 'dinov2_vits14', 'vgg16', 'vgg19', 'random', 'vgg_random')
+
+
+def _vgg_texture():
+    import torch, torch.nn as nn
+
+    class VGGTexture(nn.Module):
+        """Frozen VGG convolutional trunk returning texture statistics per tile: the
+        per-channel mean and SD of the last ReLU in blocks 3, 4 and 5 (a compact form of
+        the Gram-matrix diagonal). `blocks` maps each block to its slice of the output."""
+        def __init__(self, features):
+            super().__init__()
+            self.features, self.taps, self.blocks = features, {}, {}
+            block, last_relu, start = 1, None, 0
+            for i, layer in enumerate(features):
+                if isinstance(layer, nn.ReLU): last_relu = i
+                elif isinstance(layer, nn.MaxPool2d):
+                    if block >= 3:
+                        ch = next(l.out_channels for l in reversed(features[:last_relu]) if isinstance(l, nn.Conv2d))
+                        self.taps[last_relu] = f'block{block}'
+                        self.blocks[f'block{block}'] = (start, start + 2 * ch); start += 2 * ch
+                    block += 1
+            for l in features:  # in-place ReLUs would overwrite tapped activations
+                if isinstance(l, nn.ReLU): l.inplace = False
+
+        def forward(self, x):
+            out = []
+            for i, layer in enumerate(self.features):
+                x = layer(x)
+                if i in self.taps:
+                    f = x.flatten(2)
+                    out += [f.mean(-1), f.std(-1)]
+                    if i == max(self.taps): break
+            return torch.cat(out, 1)
+    return VGGTexture
+
+
 def load_backbone(name, device):
-    """resnet50 (torchvision ImageNet), dinov2_vits14 (torch.hub) or random (untrained
-    resnet18, for dry runs). Pretrained weights download on first use."""
+    """resnet50 (torchvision ImageNet), dinov2_vits14 (torch.hub), vgg16 / vgg19 (torchvision
+    ImageNet; multi-block texture statistics), or random / vgg_random (untrained ResNet-18 /
+    VGG-11, for dry runs). Pretrained weights download on first use."""
     import torch, torchvision
     if name == 'resnet50':
         m = torchvision.models.resnet50(weights='IMAGENET1K_V2'); m.fc = torch.nn.Identity()
@@ -65,8 +103,18 @@ def load_backbone(name, device):
         torch.manual_seed(0); m = torchvision.models.resnet18(weights=None); m.fc = torch.nn.Identity()
     elif name == 'dinov2_vits14':
         m = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14')
+    elif name in ('vgg16', 'vgg19'):
+        m = _vgg_texture()(getattr(torchvision.models, name)(weights='IMAGENET1K_V1').features)
+    elif name == 'vgg_random':
+        torch.manual_seed(0); m = _vgg_texture()(torchvision.models.vgg11(weights=None).features)
     else: raise ValueError(name)
     return m.eval().to(device)
+
+
+def feature_blocks(net):
+    """'block3:0:512' style descriptors of which output columns come from which VGG block
+    (empty for single-vector backbones), so evaluation can select layers."""
+    return [f'{k}:{a}:{b}' for k, (a, b) in getattr(net, 'blocks', {}).items()]
 
 
 def embed_tiles(net, T, device):

@@ -75,6 +75,35 @@ def test_image_embed_and_eval_end_to_end(packet_with_tiffs, tmp_path):
     assert 'lot probe accuracy' in out
 
 
+def test_vgg_texture_features():
+    import torch
+    from eptfe.image import load_backbone, feature_blocks
+    net = load_backbone('vgg_random', 'cpu')
+    assert [b.split(':')[0] for b in feature_blocks(net)] == ['block3', 'block4', 'block5']
+    x = torch.rand(3, 3, 64, 64)
+    with torch.no_grad(): z = net(x)
+    assert z.shape == (3, max(b for _, b in net.blocks.values()))
+    # first block3 columns are the per-channel spatial means of that block's last ReLU
+    with torch.no_grad():
+        act = x
+        for i, layer in enumerate(net.features):
+            act = layer(act)
+            if net.taps.get(i) == 'block3': break
+    lo, hi = net.blocks['block3']; c = (hi - lo) // 2
+    assert torch.allclose(z[:, lo:lo + c], act.flatten(2).mean(-1), atol=1e-5)
+    assert torch.allclose(z[:, lo + c:hi], act.flatten(2).std(-1), atol=1e-5)
+
+
+def test_vgg_embed_and_eval_with_block_selection(packet_with_tiffs, tmp_path):
+    emb = tmp_path / 'emb_vgg.npz'
+    run('image_embed.py', '--packet', packet_with_tiffs, '--images', packet_with_tiffs, '--backbone', 'vgg_random',
+        '--tile', 64, '--crop-bottom', 32, '--out', emb)
+    z = np.load(emb)
+    assert z['inner'].shape[:2] == (20, 15) and len(z['blocks']) == 3
+    out = run('image_eval.py', '--packet', packet_with_tiffs, '--emb', emb, '--seeds', 1, '--blocks', 'block5')
+    assert "blocks=['block5']" in out and 'lot probe accuracy' in out
+
+
 def test_image_embed_rejects_hash_mismatch(packet_with_tiffs, tmp_path):
     import pandas as pd
     im = pd.read_csv(packet_with_tiffs / 'images.csv', dtype=str); im.loc[0, 'sha256'] = '0' * 64
